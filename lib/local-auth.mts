@@ -187,7 +187,11 @@ export function configuredOrigin() {
 export function checkRequestOrigin(
   headers: Headers, method: string, origin: string, transport: 'cookie' | 'bearer' | 'none',
 ) {
-  if (headers.get('host') !== new URL(origin).host) reject(403, 'Request origin rejected');
+  // Bearer clients on this machine (the listener is loopback-only) may address it directly;
+  // cookies stay bound to the configured origin.
+  const host = headers.get('host') ?? '';
+  const loopbackBearer = transport === 'bearer' && /^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(host);
+  if (host !== new URL(origin).host && !loopbackBearer) reject(403, 'Request origin rejected');
   const supplied = headers.get('origin');
   if (supplied !== null && supplied !== origin) reject(403, 'Request origin rejected');
   if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && transport !== 'bearer' && supplied !== origin) {

@@ -11,7 +11,7 @@ npm run accounts -- revoke
 
 创建与重置从提示或 stdin 读取密码；revoke 从 stdin/提示读取 token。重置密码会撤销该账户 session/token；密码登录的节流和重置并发在数据库中原子处理。
 
-浏览器使用 HttpOnly、SameSite=Strict cookie，HTTPS 额外使用 Secure。API 使用 Bearer token；不能同时提交两种凭据。身份 header、任意 owner 字段或客户端自报权限都不能替代认证。浏览器写操作保留精确 Host/Origin 校验。
+浏览器使用 HttpOnly、SameSite=Strict cookie，HTTPS 额外使用 Secure。API 使用 Bearer token；不能同时提交两种凭据。身份 header、任意 owner 字段或客户端自报权限都不能替代认证。浏览器写操作保留精确 Host/Origin 校验；Bearer 请求额外接受 loopback Host。
 
 ## workspace 客户端
 

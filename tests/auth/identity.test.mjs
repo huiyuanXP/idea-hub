@@ -10,7 +10,7 @@ test('identity headers never create a credential and conflicting real transports
 });
 test('local write policy enforces canonical Host/Origin with programmatic bearer support',()=>{
  for(const [method,transport,headers,allowed] of [
- ['GET','none',{},true],['POST','bearer',{},true],['POST','cookie',{},false],['POST','cookie',{origin},true],['POST','bearer',{origin:'https://foreign.invalid'},false],['GET','bearer',{host:'foreign.invalid'},false],['POST','none',{origin:'null'},false]]){
+ ['GET','none',{},true],['POST','bearer',{},true],['POST','cookie',{},false],['POST','cookie',{origin},true],['POST','bearer',{origin:'https://foreign.invalid'},false],['GET','bearer',{host:'foreign.invalid'},false],['POST','none',{origin:'null'},false],['POST','bearer',{host:'127.0.0.1:4180'},true],['POST','cookie',{host:'127.0.0.1:4180',origin},false]]){
   const call=()=>checkRequestOrigin(new Headers({host:new URL(origin).host,...headers}),method,origin,transport);
   if(allowed)assert.doesNotThrow(call);else assert.throws(call);
  }

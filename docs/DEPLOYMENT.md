@@ -19,7 +19,7 @@ node --env-file=.env --experimental-strip-types scripts/server.mjs
 
 SQLite 使用 WAL、外键和追加的有序迁移，schema_migrations 跟踪已执行 SQL；正常重启不得重新手动执行全部原始 SQL。数据库、WAL 和连接凭据须保存到私有目录。
 
-临时远程预览可以用 HTTPS 隧道连接 loopback 服务，并将 APP_ORIGIN 配置成该 HTTPS origin。Host/Origin 必须匹配；HTTPS 浏览器 cookie 使用 Secure。隧道地址变化时，更新服务 origin 和客户端 set-url 设置，保留数据库。
+临时远程预览可以用 HTTPS 隧道连接 loopback 服务，并将 APP_ORIGIN 配置成该 HTTPS origin。浏览器 Host/Origin 必须匹配；本机 Bearer 客户端（连接器 Agent/MCP）也可以直接使用 loopback 地址，避免隧道的浏览器验证拦截；HTTPS 浏览器 cookie 使用 Secure。隧道地址变化时，更新服务 origin 和客户端 set-url 设置，保留数据库。
 
 停止进程会先关闭 HTTP 与维护定时器，再关闭数据库。升级先停止旧服务、构建、再启动，避免正在访问时改写共享 .next。客户端安装入口 /install；包下载 /api/connectors/download。
 
