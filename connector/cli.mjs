@@ -158,7 +158,7 @@ async function install(options) {
   if (!enrollment.token || !enrollment.connection?.id) throw Error('Enrollment returned incomplete connection credentials');
   const directory = dirname(file);
   const runtime = await installRuntime(directory);
-  const config = { version: VERSION, installationId: randomUUID(), connectionId: enrollment.connection.id, projectId: enrollment.connection.projectId, project: enrollment.connection.project, capabilities: enrollment.connection.capabilities || [], token: enrollment.token, url: serviceUrl(enrollment.origin || url), workspace, file, runtime };
+  const config = { version: VERSION, installationId: randomUUID(), connectionId: enrollment.connection.id, projectId: enrollment.connection.projectId, project: enrollment.connection.project, capabilities: enrollment.connection.capabilities || [], token: enrollment.token, url, workspace, file, runtime };
   await persistCodexOptions(config, options);
   await persistAccessOptions(config, options);
   await privateJson(file, config);
