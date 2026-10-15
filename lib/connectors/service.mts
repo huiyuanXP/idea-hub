@@ -96,7 +96,7 @@ export async function heartbeatConnector(db:LocalDatabase,principal:ConnectorPri
   connectorInput(input.runtime,['profile','model','provider','access']);
   const safe:Record<string,string|null>={};
   const access=input.runtime.access;
-  if(access!==undefined&&access!==null&&!['codex-config','codex-login','api'].includes(access as string))throw new AuthError(400,'Invalid runtime metadata');
+  if(access!==undefined&&access!==null&&!['codex-config','codex-login','api','claude'].includes(access as string))throw new AuthError(400,'Invalid runtime metadata');
   if(access!==undefined)safe.access=access as string|null;
   for(const field of ['profile','model','provider']){
    const value=input.runtime[field];

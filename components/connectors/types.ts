@@ -13,7 +13,7 @@ export interface WorkspaceConnection {
   mcpLastSeen?: number | null;
   agentLastSeen?: number | null;
   workspace?: string;
-  runtime?: { profile: string | null; model: string | null; provider: string | null; access?: "codex-config" | "codex-login" | "api" | null } | null;
+  runtime?: { profile: string | null; model: string | null; provider: string | null; access?: "codex-config" | "codex-login" | "api" | "claude" | null } | null;
   events?: { id: string; mode: string; message: string | null; createdAt: number }[];
 }
 

@@ -163,5 +163,6 @@ export async function codexMetadata(options = {}, workspace = process.cwd()) {
 export function selectedCodexOptions(config, options) {
   const selected = { ...options };
   for (const name of ['profile', 'model', 'reasoning']) if (selected[name] === undefined && config.codex?.[name]) selected[name] = config.codex[name];
+  if (selected.claude === undefined && config.claude?.executable) selected.claude = config.claude.executable;
   return selected;
 }

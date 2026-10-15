@@ -11,7 +11,7 @@ import { apiBaseUrl } from './api-runner.mjs';
 const begin = '# BEGIN agent-task-hub connector';
 const end = '# END agent-task-hub connector';
 const booleanOptions = new Set(['code-stdin', 'once', 'help']);
-const valueOptions = new Set(['url', 'workspace', 'config', 'name', 'codex', 'test-runner', 'profile', 'model', 'reasoning', 'access', 'api-base-url', 'api-key-env', 'api-model', 'api-profile']);
+const valueOptions = new Set(['url', 'workspace', 'config', 'name', 'codex', 'test-runner', 'claude', 'profile', 'model', 'reasoning', 'access', 'api-base-url', 'api-key-env', 'api-model', 'api-profile']);
 function optionsFor(args) {
   const options = {};
   for (let index = 0; index < args.length; index++) {
@@ -26,7 +26,7 @@ function optionsFor(args) {
   if (options.profile && !/^[A-Za-z0-9_-]+$/.test(options.profile)) throw Error('--profile must be a name without path separators');
   if (options.model && (!/^[A-Za-z0-9._:/-]+$/.test(options.model) || options.model.length > 120)) throw Error('--model must be a model name (up to 120 characters)');
   if (options.reasoning && !['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(options.reasoning)) throw Error('--reasoning must be none, minimal, low, medium, high or xhigh');
-  if (options.access && !['codex', 'api'].includes(options.access)) throw Error('--access must be codex or api');
+  if (options.access && !['codex', 'api', 'claude'].includes(options.access)) throw Error('--access must be codex, api or claude');
   if (options['api-base-url']) options['api-base-url'] = apiBaseUrl(options['api-base-url']);
   if (options['api-key-env'] && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(options['api-key-env'])) throw Error('--api-key-env must name an environment variable, not contain the key');
   if (options['api-model'] && (!/^[A-Za-z0-9._:/-]+$/.test(options['api-model']) || options['api-model'].length > 120)) throw Error('--api-model must be a model name (up to 120 characters)');
@@ -37,12 +37,13 @@ function optionsFor(args) {
 async function persistAccessOptions(config, options) {
   const api = Object.fromEntries([['baseUrl', 'api-base-url'], ['keyEnv', 'api-key-env'], ['model', 'api-model'], ['profile', 'api-profile']].filter(([, flag]) => options[flag] !== undefined).map(([name, flag]) => [name, options[flag]]));
   if (!options.access && !Object.keys(api).length) return;
-  if (options.access) config.access = options.access === 'api' ? 'api' : undefined;
+  if (options.access) config.access = options.access === 'codex' ? undefined : options.access;
   if (Object.keys(api).length) { config.api = { ...(config.api || {}), ...api }; if (!options.access) config.access = 'api'; }
   if (options.reasoning && config.access === 'api') config.api = { ...config.api, reasoning: options.reasoning };
   await privateJson(config.file, config);
 }
 async function persistCodexOptions(config, options) {
+  if (options.claude) { config.claude = { executable: options.claude }; await privateJson(config.file, config); }
   const selected = Object.fromEntries(['profile', 'model', 'reasoning'].filter(name => options[name] !== undefined).map(name => [name, options[name]]));
   if (!Object.keys(selected).length) return;
   if (selected.profile) await codexMetadata(selectedCodexOptions(config, options), config.workspace);
@@ -171,7 +172,7 @@ async function main() {
   const subcommand = process.argv[2] || 'help';
   const options = optionsFor(process.argv.slice(3));
   if (subcommand === 'help' || options.help) {
-    process.stdout.write('agent-task-hub: install | doctor | mcp | agent | set-url | uninstall\nOptions: --url ORIGIN --workspace GIT_ROOT --config FILE --name NAME --code-stdin\nCodex: --profile NAME|default --model MODEL --reasoning EFFORT (saved locally); omitted values inherit user configuration.\nAPI Call: --access codex|api --api-profile NAME | --api-base-url URL --api-key-env VAR --api-model MODEL (OpenAI-compatible; only the variable name is saved).\nagent: --once --codex EXECUTABLE; --test-runner FILE is synthetic testing only.\n');
+    process.stdout.write('agent-task-hub: install | doctor | mcp | agent | set-url | uninstall\nOptions: --url ORIGIN --workspace GIT_ROOT --config FILE --name NAME --code-stdin\nCodex: --profile NAME|default --model MODEL --reasoning EFFORT (saved locally); omitted values inherit user configuration.\nClaude Code: --access claude [--claude EXECUTABLE] (uses the local claude login; --model/--reasoning apply).\nAPI Call: --access codex|api --api-profile NAME | --api-base-url URL --api-key-env VAR --api-model MODEL (OpenAI-compatible; only the variable name is saved).\nagent: --once --codex EXECUTABLE; --test-runner FILE is synthetic testing only.\n');
     return;
   }
   if (subcommand === 'install') return install(options);
@@ -188,7 +189,7 @@ async function main() {
     await persistAccessOptions(config, options);
     const readiness = await codexReadiness(selectedCodexOptions(config, options), config.workspace, config);
     await heartbeat(config, 'mcp');
-    process.stdout.write(`Connection: ${config.connectionId}\nVersion: ${VERSION}\nService: reachable\n${config.access === 'api' ? `Access: API Call (OpenAI-compatible) model=${config.runtimeSelection.model || 'unset'} endpoint=${config.runtimeSelection.provider || 'unset'} key=$${config.runtimeSelection.keyEnv || config.api?.keyEnv || 'unset'}` : `Access: Codex ${config.runtimeSelection.access === 'codex-login' ? 'account login' : 'local configuration'} profile=${config.runtimeSelection.profile || 'default'} model=${config.runtimeSelection.model || 'default'} provider=${config.runtimeSelection.provider || 'default'}`}\nAgent: ${readiness.ready ? 'ready' : readiness.error}\n`);
+    process.stdout.write(`Connection: ${config.connectionId}\nVersion: ${VERSION}\nService: reachable\n${config.access === 'claude' ? `Access: Claude Code CLI model=${config.runtimeSelection.model || 'default'}` : config.access === 'api' ? `Access: API Call (OpenAI-compatible) model=${config.runtimeSelection.model || 'unset'} endpoint=${config.runtimeSelection.provider || 'unset'} key=$${config.runtimeSelection.keyEnv || config.api?.keyEnv || 'unset'}` : `Access: Codex ${config.runtimeSelection.access === 'codex-login' ? 'account login' : 'local configuration'} profile=${config.runtimeSelection.profile || 'default'} model=${config.runtimeSelection.model || 'default'} provider=${config.runtimeSelection.provider || 'default'}`}\nAgent: ${readiness.ready ? 'ready' : readiness.error}\n`);
     return;
   }
   if (subcommand === 'set-url') {
