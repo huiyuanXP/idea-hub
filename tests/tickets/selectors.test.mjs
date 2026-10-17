@@ -31,6 +31,10 @@ test('actions use exact revision review; old active Run blocks replacement; done
  assert.deepEqual(resolveTicketAction(ticket,'done',[workspace('current',2,'review')]),{type:'open-review',runId:'current'});
  assert.equal(resolveTicketAction(ticket,'done',[],[docker('d',2,'succeeded')]).type,'completed-info');
  for(const target of ['todo','running','waiting','error'])assert.equal(resolveTicketAction(row('ticket',{status:'done'}),target,[workspace('current',2,'review')]).type,'completed-info');
+ assert.deepEqual(resolveTicketAction(ticket,'archive',[workspace('current',2,'review')]),{type:'open-review',runId:'current'});
+ assert.deepEqual(resolveTicketAction(row('ticket',{status:'waiting',waitingReason:'review',evidence:'ok'}),'archive'),{type:'open-status',status:'done'});
+ assert.equal(resolveTicketAction(row('ticket',{status:'waiting',waitingReason:'review'}),'archive').type,'completed-info');
+ assert.equal(resolveTicketAction(ticket,'archive').type,'completed-info');
  const context=ticketExecutionContext(ticket,[workspace('old',1,'running'),workspace('recent',2,'failed')],[docker('old-d',1,'queued')]);
  assert.equal(context.currentWorkspace.length,1);assert.equal(context.historicalWorkspace.length,1);
  assert.equal(context.activeWorkspace.id,'old');assert.equal(context.activeDocker.id,'old-d');
@@ -39,11 +43,12 @@ test('board state follows real Runs: approve and claim move to running, failure 
  const ticket=row('ticket');
  assert.deepEqual(boardState(ticket,[workspace('p',2,'pending',{createdAt:1})],[]),{status:'todo',tag:'开发申请待批准'});
  assert.equal(boardState(ticket,[workspace('a',2,'approved',{createdAt:1})],[]).status,'running');
- assert.equal(boardState(ticket,[workspace('r',2,'review',{createdAt:1})],[]).status,'running');
+ assert.deepEqual(boardState(ticket,[workspace('r',2,'review',{createdAt:1})],[]),{status:'done',tag:'等待审核'});
+ assert.deepEqual(boardState(row('ticket',{status:'waiting',waitingReason:'review'}),[],[]),{status:'done',tag:'等待审核'});
  assert.equal(boardState(ticket,[],[docker('d',2,'running')]).status,'running');
  assert.equal(boardState(ticket,[workspace('f',2,'failed',{createdAt:2,error:'boom'}),workspace('old',2,'succeeded',{createdAt:1})],[]).status,'error');
  assert.equal(boardState(ticket,[workspace('f',1,'failed',{createdAt:2})],[]).status,'todo');
- assert.equal(boardState(row('ticket',{status:'done'}),[workspace('a',2,'approved',{createdAt:1})],[]).status,'done');
+ assert.deepEqual(boardState(row('ticket',{status:'done'}),[workspace('a',2,'approved',{createdAt:1})],[]),{status:'done',archived:true});
  assert.equal(resolveTicketAction(ticket,'todo').type,'no-op');
 });
 test('recommended order is deterministic: runnable first, then in progress, waiting, blocked, done',()=>{

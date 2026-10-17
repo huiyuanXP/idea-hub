@@ -3,7 +3,7 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import {TicketBoard} from "../components/board/ticket-board";
 import {TicketCard} from "../components/board/ticket-card";
 import {TicketActionDialog} from "../components/board/ticket-action-dialog";
-import {sortTickets,filterTickets,defaultTicketSort,boardState,ticketReadiness} from "../lib/tickets/selectors.mts";
+import {sortTickets,filterTickets,defaultTicketSort,boardState,ticketReadiness,isArchived,REVIEW_TAG} from "../lib/tickets/selectors.mts";
 import type {BoardState} from "../lib/tickets/selectors.mts";
 import type {WorkspaceRun} from "../lib/workspace-runs/types.mts";
 import type {Run as DockerRun} from "../lib/execution/types.mts";
@@ -41,6 +41,7 @@ import {
   SlidersHorizontal,
   Layers,
   AlertCircle,
+  Archive,
 } from "lucide-react";
 const statuses: Record<string, string> = {
   todo: "待开始",
@@ -87,7 +88,7 @@ export default function Home() {
     [projects, setProjects] = useState<string[]>([]),
     [view, setView] = useState("inbox"),
     [query, setQuery] = useState(""),
-    [project, setProject] = useState("全部项目"),
+    [project, setProject] = useState("通用"),
     [stateFilter, setStateFilter] = useState("all"),
     [list, setList] = useState(false),
     [loading, setLoading] = useState(true),
@@ -119,7 +120,7 @@ export default function Home() {
   // The sidebar, filter and capture dropdown share one project selection.
   function selectProject(value: string) {
     setProject(value);
-    setCaptureProject(value === "全部项目" ? "通用" : value);
+    setCaptureProject(value);
   }
   const clearPrivateState = useCallback(() => {
     identityVersion.current++;
@@ -134,7 +135,7 @@ export default function Home() {
     setCapture("");
     setCaptureProject("通用");
     setQuery("");
-    setProject("全部项目");
+    setProject("通用");
     setStateFilter("all");
     setView("inbox");
     setList(false);
@@ -238,7 +239,7 @@ export default function Home() {
     const refresh = () => {
       if (document.visibilityState === "visible") load(true);
     };
-    const timer = window.setInterval(refresh, 10000);
+    const timer = window.setInterval(refresh, 3000);
     window.addEventListener("focus", refresh);
     window.addEventListener("online", refresh);
     document.addEventListener("visibilitychange", refresh);
@@ -252,6 +253,12 @@ export default function Home() {
       document.removeEventListener("visibilitychange", refresh);
     };
   }, [load]);
+  // Switching project or view re-reads at once, so lists never wait for the next poll.
+  const firstSelection = useRef(true);
+  useEffect(() => {
+    if (firstSelection.current) { firstSelection.current = false; return; }
+    if (sessionRef.current) void load(true);
+  }, [project, view, load]);
   function openPlan(idea: Row) {
     const plan = rows.find(r => r.kind === "plan" && r.ideaId === idea.id && r.ideaRevision === idea.revision)
       || rows.find(r => r.kind === "plan" && r.id === idea.planId && r.ideaId === idea.id);
@@ -301,7 +308,10 @@ export default function Home() {
       project: captureProject,
       priority: capturePriority,
     });
-    if (d) setCapture("");
+    if (d) {
+      setCapture("");
+      selectProject(captureProject);
+    }
   }
   async function requestPlan(idea: Row) {
     const version = identityVersion.current;
@@ -369,13 +379,16 @@ export default function Home() {
   }
   const ideas = rows.filter((r) => r.kind === "idea"),
     plans = rows.filter((r) => r.kind === "plan"),
-    tickets = rows.filter((r) => r.kind === "ticket"),
+    allTickets = rows.filter((r) => r.kind === "ticket"),
+    // Accepted (done) Tickets are archived: kept as records, never on the board.
+    tickets = allTickets.filter((r) => !isArchived(r)),
+    archived = allTickets.filter(isArchived),
     runs = rows.filter((r) => r.kind === "run");
   const waiting = tickets.filter((r) => r.status === "waiting");
   const filtered = (items: Row[]) =>
     items.filter(
       (r) =>
-        (project === "全部项目" || (r.project || "通用") === project) &&
+        (r.project || "通用") === project &&
         (!query ||
           [r.title, r.text, r.goal, r.project, r.id, r.planId, r.ideaId]
             .join(" ")
@@ -383,12 +396,15 @@ export default function Home() {
             .includes(query.toLowerCase())) &&
         (stateFilter === "all" || r.status === stateFilter),
     );
+  // Sidebar and metric counts follow the selected project, like the lists they open.
+  const inProject = (items: Row[]) => items.filter((r) => (r.project || "通用") === project);
   const titles: Record<string, string> = {
     inbox: "点子收件箱",
     plans: "规划工作台",
     board: "Ticket 看板",
     review: "待我处理",
     runs: "执行记录",
+    archive: "归档",
     integrations: "连接与执行",
   };
   const descriptions: Record<string, string> = {
@@ -397,14 +413,15 @@ export default function Home() {
     board: "从待开始到已完成，跟进每一步。",
     review: "集中处理澄清、授权、验收和外部依赖。",
     runs: "保留执行时的任务版本与验收证据。",
+    archive: "审核通过的 Ticket 存档于此，不再出现在看板中。",
     integrations: "安装 MCP、关联 workspace，查看真实连接与 Agent 状态。",
   };
-  const boardStates=new Map<string,BoardState>(tickets.map(ticket=>[ticket.id,boardState(ticket,boardRuns.workspace,boardRuns.docker)]));
-  const readiness=ticketReadiness(tickets,boardStates);
+  const boardStates=new Map<string,BoardState>(allTickets.map(ticket=>[ticket.id,boardState(ticket,boardRuns.workspace,boardRuns.docker)]));
+  const readiness=ticketReadiness(allTickets,boardStates);
   const visibleTickets=sortTickets(filterTickets(tickets,{project,query}).filter(ticket=>stateFilter==="all"||boardStates.get(ticket.id)?.status===stateFilter),ticketSort,readiness);
   const openBoardIntent=(ticket:Row,target:string)=>{if(target!==(boardStates.get(ticket.id)?.status??ticket.status))setBoardAction({ticket,target});};
   const openBoardExecution=(ticket:Row)=>setBoardAction({ticket,target:"execute"});
-  function ticketCard(ticket:Row){return <TicketCard key={ticket.id} ticket={ticket} onDetails={ticket=>setDraft({...ticket})} onIntent={openBoardIntent} onExecute={openBoardExecution}/>;}
+  function ticketCard(ticket:Row){return <TicketCard key={ticket.id} ticket={ticket} state={boardStates.get(ticket.id)} onDetails={ticket=>setDraft({...ticket})} onIntent={openBoardIntent} onExecute={openBoardExecution}/>;}
   return (
     <div className="app">
       <aside className="sidebar">
@@ -416,7 +433,7 @@ export default function Home() {
             event.preventDefault();
             setView("inbox");
             setQuery("");
-            setProject("全部项目");
+            setProject("通用");
             setStateFilter("all");
             setList(false);
             setDraft(null);
@@ -444,11 +461,12 @@ export default function Home() {
         <nav>
           {(
             [
-              ["inbox", "点子收件箱", Inbox, ideas.length],
-              ["plans", "规划工作台", FileText, plans.length],
-              ["board", "Ticket 看板", LayoutGrid, tickets.length],
-              ["review", "待我处理", AlertCircle, waiting.length],
-              ["runs", "执行记录", History, runs.length],
+              ["inbox", "点子收件箱", Inbox, inProject(ideas).length],
+              ["plans", "规划工作台", FileText, inProject(plans).length],
+              ["board", "Ticket 看板", LayoutGrid, inProject(tickets).length],
+              ["review", "待我处理", AlertCircle, inProject(waiting).length],
+              ["runs", "执行记录", History, inProject(runs).length],
+              ["archive", "归档", Archive, inProject(archived).length],
             ] as [string, string, LucideIcon, number][]
           ).map(([key, label, Icon, count]) => (
             <button
@@ -467,13 +485,6 @@ export default function Home() {
         </nav>
         <span className="nav-label">项目</span>
         <div className="project-list">
-          <button
-            className={project === "全部项目" ? "selected" : ""}
-            onClick={() => selectProject("全部项目")}
-          >
-            <span className="project-square" />
-            全部项目
-          </button>
           {projects.map((p) => (
             <button
               key={p}
@@ -546,9 +557,9 @@ export default function Home() {
               className="primary"
               onClick={() =>
                 view === "inbox"
-                  ? setDraft({ ...empty("idea"), project: project === "全部项目" ? "通用" : project })
+                  ? setDraft({ ...empty("idea"), project })
                   : view === "plans"
-                    ? setDraft({ ...empty("plan"), project: project === "全部项目" ? "通用" : project })
+                    ? setDraft({ ...empty("plan"), project })
                     : createTicket()
               }
             >
@@ -577,7 +588,7 @@ export default function Home() {
             <div>
               <span>收集的点子</span>
               <strong>
-                {ideas.length}
+                {inProject(ideas).length}
                 <small>个想法</small>
               </strong>
             </div>
@@ -585,7 +596,7 @@ export default function Home() {
               <span>待推进任务</span>
               <strong>
                 {
-                  tickets.filter(
+                  inProject(tickets).filter(
                     (t) => t.status === "todo" || t.status === "running",
                   ).length
                 }
@@ -594,16 +605,16 @@ export default function Home() {
             </div>
             <div>
               <span>需要你的处理</span>
-              <strong className={waiting.length ? "amber" : ""}>
-                {waiting.length}
+              <strong className={inProject(waiting).length ? "amber" : ""}>
+                {inProject(waiting).length}
                 <small>项等待</small>
               </strong>
             </div>
             <div>
               <span>已完成</span>
               <strong>
-                {tickets.filter((t) => t.status === "done").length}
-                <small>项交付</small>
+                {inProject(tickets).filter((t) => boardStates.get(t.id)?.tag === REVIEW_TAG).length}
+                <small>项待审核</small>
               </strong>
             </div>
           </div>
@@ -668,7 +679,9 @@ export default function Home() {
                         ? "任务进度"
                         : view === "review"
                           ? "等待队列"
-                          : "记录列表"}
+                          : view === "archive"
+                            ? "已归档 Ticket"
+                            : "记录列表"}
                 </strong>
                 <span>
                   {
@@ -681,7 +694,9 @@ export default function Home() {
                             ? runs
                             : view === "review"
                               ? waiting
-                              : tickets,
+                              : view === "archive"
+                                ? archived
+                                : tickets,
                     ).length
                   }
                 </span>
@@ -701,7 +716,7 @@ export default function Home() {
                   value={project}
                   onChange={(e) => selectProject(e.target.value)}
                 >
-                  <option>全部项目</option>
+                  {!projects.includes(project) && <option>{project}</option>}
                   {projects.map((p) => (
                     <option key={p}>{p}</option>
                   ))}
@@ -783,7 +798,7 @@ export default function Home() {
                           <div className="planning-next-step">
                             <p>点子已保存。接入「{i.project || "通用"}」项目的 Agent 后会自动领取规划；也可以先手工整理成 Plan。</p>
                             <button className="secondary" type="button" onClick={() => {
-                              setProject(i.project || "通用");
+                              selectProject(i.project || "通用");
                               setQuery("");
                               setView("integrations");
                             }}>接入项目 Agent</button>
@@ -859,7 +874,7 @@ export default function Home() {
                           className="text-btn"
                           onClick={() => {
                             setView("board");
-                            setProject("全部项目");
+                            selectProject(p.project || "通用");
                             setStateFilter("all");
                             setQuery(p.id);
                           }}
@@ -880,11 +895,11 @@ export default function Home() {
               )}
               {view === "board" && filtered(tickets).length === 0 && (
                 <div className="empty">
-                  <h3>{query || project !== "全部项目" ? "没有匹配的 Ticket" : "先把想法变成一个 Ticket"}</h3>
+                  <h3>{query ? "没有匹配的 Ticket" : "当前项目还没有 Ticket"}</h3>
                   <p>从点子整理目标、范围和验收，再拆成任务；已有明确任务也可以直接创建。</p>
                   <div className="card-actions">
                     <button className="primary" type="button" onClick={() => { setQuery(""); setView("inbox"); }}>从点子开始</button>
-                    <button className="secondary" type="button" onClick={() => setDraft({ ...empty("ticket"), project: project === "全部项目" ? "通用" : project })}>创建第一个 Ticket</button>
+                    <button className="secondary" type="button" onClick={() => setDraft({ ...empty("ticket"), project })}>创建第一个 Ticket</button>
                   </div>
                 </div>
               )}
@@ -892,6 +907,11 @@ export default function Home() {
               {view === "review" && (
                 <div className="idea-grid">
                   {filtered(waiting).map(ticketCard)}
+                </div>
+              )}
+              {view === "archive" && (
+                <div className="idea-grid">
+                  {filtered(archived).map(ticketCard)}
                 </div>
               )}
               {view === "runs" && (
@@ -931,7 +951,9 @@ export default function Home() {
                       ? plans
                       : view === "runs"
                         ? runs
-                        : waiting,
+                        : view === "archive"
+                          ? archived
+                          : waiting,
                 ).length === 0 && (
                   <div className="empty">
                     <span className="empty-icon">
@@ -942,7 +964,7 @@ export default function Home() {
                       )}
                     </span>
                     <h3>
-                      {query || project !== "全部项目"
+                      {query
                         ? "没有匹配的记录"
                         : view === "inbox"
                           ? "第一个好点子，从这里开始"
@@ -950,7 +972,9 @@ export default function Home() {
                             ? "把点子整理成清晰的行动计划"
                             : view === "review"
                               ? "暂时没有需要处理的等待项"
-                              : "还没有执行记录"}
+                              : view === "archive"
+                                ? "还没有归档的 Ticket"
+                                : "还没有执行记录"}
                     </h3>
                     <p>
                       {view === "inbox"
@@ -959,7 +983,9 @@ export default function Home() {
                           ? "从点子收件箱整理，或新建一个 Plan。"
                           : view === "review"
                             ? "需要澄清、授权或验收的任务会出现在这里。"
-                            : "在 Ticket 详情中追加真实的执行证据。"}
+                            : view === "archive"
+                              ? "已完成列中等待审核的 Ticket 审核通过后自动归档。"
+                              : "在 Ticket 详情中追加真实的执行证据。"}
                     </p>
                   </div>
                 )}
@@ -973,12 +999,12 @@ export default function Home() {
                 />
                 </details>
               )}
-              {["board", "review", "runs"].includes(view) && (
-                <details className="workspace-section" open={tickets.length > 0}>
+              {["board", "review", "runs", "archive"].includes(view) && (
+                <details className="workspace-section" open={tickets.length > 0 && view !== "archive"}>
                 <summary>本机 Agent 开发执行 · 申请、进度与验收</summary>
                 <DevelopmentPanel
                   key={session?.user.userId ?? "anonymous"}
-                  tickets={tickets}
+                  tickets={allTickets}
                   project={project}
                   onAuthenticationDenied={panelAuthenticationDenied}
                   onRecordsChanged={() => void load(true)}
@@ -989,7 +1015,7 @@ export default function Home() {
                 <ConnectionPanel
                   key={session?.user.userId ?? "anonymous"}
                   projects={projects}
-                  initialProject={project === "全部项目" ? "通用" : project}
+                  initialProject={project}
                   onProjectsChanged={projectCatalogChanged}
                   onAuthenticationDenied={panelAuthenticationDenied}
                 />
@@ -999,7 +1025,7 @@ export default function Home() {
           <footer className="main-footer">
             <span>IDEA → PLAN → TICKET → EVIDENCE</span>
             <span>
-              每 10 秒自动刷新 ·{" "}
+              每 3 秒自动刷新 ·{" "}
               {planning.subscriptions > 0
                 ? "规划事件已订阅 · MCP 与 Agent 状态见连接与执行"
                 : "MCP 与 Agent 状态见连接与执行"}

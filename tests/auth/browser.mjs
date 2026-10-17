@@ -69,7 +69,7 @@ async function api(path, jwt = current, body) {
 }
 try {
   const db=f.db;
-  const idea = await api('/api/records', alice, { kind: 'idea', title: 'Alice private idea', text: 'Private body', project: 'Alice project' });
+  const idea = await api('/api/records', alice, { kind: 'idea', title: 'Alice private idea', text: 'Private body', project: '通用' });
   await api('/api/planning', alice, { ideaId: idea.id });
   await api('/api/records', bob, { kind: 'idea', title: 'Bob private idea' });
   const ticket = await api('/api/records', alice, { kind: 'ticket', title: 'Alice private authorization Ticket', status: 'todo' });
@@ -102,7 +102,7 @@ try {
         project: document.querySelector('[aria-label="项目筛选"]')?.value,
       };
     }, undefined, { timeout });
-    assert.deepEqual(await snapshot.jsonValue(), { dialogs: 0, capture: '', account: null, aliceIdea: 0, inbox: '点子收件箱0', project: '全部项目' });
+    assert.deepEqual(await snapshot.jsonValue(), { dialogs: 0, capture: '', account: null, aliceIdea: 0, inbox: '点子收件箱0', project: '通用' });
     await snapshot.dispose();
   };
   await page.goto(base, { waitUntil: 'domcontentloaded' });

@@ -54,7 +54,7 @@ try {
   await sidebar.getByRole('button', { name: 'Registered without Ticket', exact: true }).click();
   await page.getByRole('button', { name: /点子收件箱/ }).click();
   assert.equal(await quickProject.inputValue(), 'Registered without Ticket');
-  assert.deepEqual(await options('[aria-label="项目筛选"]'), ['全部项目', ...records.projects.map(p => p.name)]);
+  assert.deepEqual(await options('[aria-label="项目筛选"]'), records.projects.map(p => p.name));
   await page.getByLabel('快速记录点子').fill('Registered project idea');
   await page.screenshot({ path: resolve(evidence, 'quick-capture-project.png'), fullPage: true });
   await page.getByRole('button', { name: '收集点子', exact: true }).click();
@@ -80,7 +80,7 @@ try {
   assert.equal(selected.priority, 'P1');
   await sidebar.getByRole('button', { name: 'Registered without Ticket', exact: true }).click();
   assert.equal(await quickProject.inputValue(), 'Registered without Ticket');
-  await sidebar.getByRole('button', { name: '全部项目', exact: true }).click();
+  await sidebar.getByRole('button', { name: '通用', exact: true }).click();
   assert.equal(await quickProject.inputValue(), '通用');
   await page.getByRole('button', { name: '新点子', exact: true }).click();
   const projectField = page.getByRole('dialog').getByLabel('项目', { exact: true });

@@ -32,6 +32,8 @@ try {
   assert.equal(new URL(page.url()).pathname,'/signin');ok('Browser password denial preserves the login form without issuing a session');
   await page.getByLabel('密码').fill('synthetic-password');await page.getByRole('button',{name:'登录',exact:true}).click();
   await page.getByRole('button', { name: '收集点子', exact: true }).waitFor();
+  // Views show one project at a time; the fixture lives in its own project.
+  await page.getByRole('combobox', { name: '项目筛选', exact: true }).selectOption(fixture.project);
   await page.getByRole('heading', { name: fixture.ideaTitle, exact: true }).waitFor();
   await page.getByLabel('当前账户').getByText('Alice Local', { exact: true }).waitFor();
   await page.getByText(/本地账户/).waitFor();
@@ -58,7 +60,7 @@ try {
   await page.getByRole('heading', { name: fixture.ideaTitle, exact: true }).click();
   const ideaDialog = page.getByRole('dialog');
   await ideaDialog.getByRole('button', { name: '编辑', exact: true }).click();
-  await ideaDialog.getByRole('textbox', { name: '标题', exact: true }).fill(fixture.ideaTitle + ' revised');
+  await ideaDialog.getByRole('textbox', { name: '原始内容', exact: true }).fill(fixture.ideaTitle + ' revised');
   const revisionSaved = page.waitForResponse(response => response.url() === dev + '/api/records' && response.request().method() === 'POST' && response.status() === 200);
   await ideaDialog.getByRole('button', { name: '保存到本地', exact: true }).click();
   await revisionSaved;
@@ -66,7 +68,13 @@ try {
   await page.getByRole('button', { name: '规划工作台', exact: false }).click();
   await page.locator('article').filter({ has: page.getByRole('heading', { name: fixture.planTitle, exact: true }) }).getByText('已过期 · 点子 v1 / 当前 v2', { exact: true }).waitFor({ timeout: 3000 });
   ok('Idea edit automatically queues current revision and labels superseded Plans');
+  // The fixture Ticket is done (accepted), so it is archived off the board.
   await page.getByRole('button', { name: 'Ticket 看板', exact: false }).click();
+  await page.locator('.board').waitFor();
+  assert.equal(await page.getByRole('heading', { name: fixture.ticketTitle, exact: true }).count(), 0);
+  await page.getByRole('button', { name: /归档/ }).click();
+  // The edited fixture Ticket was saved without a project, so it belongs to 通用.
+  await page.getByRole('combobox', { name: '项目筛选', exact: true }).selectOption('通用');
   await page.getByRole('heading', { name: fixture.ticketTitle, exact: true }).waitFor();
   await page.getByRole('button', { name: '执行记录', exact: false }).click();
   await page.getByRole('heading', { name: fixture.runTitle, exact: true }).waitFor();
@@ -75,7 +83,7 @@ try {
   assert.match(await frozen.innerText(), /Validate snapshot/);
   assert.match(await frozen.innerText(), /Loopback only/);
   assert.match(await frozen.innerText(), /Snapshot is immutable/);
-  ok('Plan, Ticket board and frozen Run evidence views render');
+  ok('Plan, Ticket board, archive and frozen Run evidence views render');
 
   const brand = page.getByRole('link', { name: '点子工坊 AGENT TASK HUB' });
   await page.getByRole('button', { name: 'Ticket 看板', exact: false }).click();
@@ -99,12 +107,15 @@ try {
   await refreshed;
   await page.getByRole('button', { name: '收集点子', exact: true }).waitFor();
   assert.equal(await page.getByRole('textbox', { name: '搜索', exact: true }).inputValue(), '');
-  assert.equal(await page.getByRole('combobox', { name: '项目筛选', exact: true }).inputValue(), '全部项目');
+  assert.equal(await page.getByRole('combobox', { name: '项目筛选', exact: true }).inputValue(), '通用');
   assert.equal(await page.getByRole('combobox', { name: '状态筛选', exact: true }).count(), 0);
+  // The captured idea was saved to the fixture project, so it reappears once that project is chosen.
+  await page.getByRole('combobox', { name: '项目筛选', exact: true }).selectOption(fixture.project);
   await page.getByRole('heading', { name: browserTitle, exact: true }).waitFor();
   ok('Normal brand navigation restores inbox and clears workspace filters');
   await page.screenshot({ path: join(out, 'dev-ui.png'), fullPage: true });
   await page.reload({ waitUntil: 'networkidle' });
+  await page.getByRole('combobox', { name: '项目筛选', exact: true }).selectOption(fixture.project);
   await page.getByRole('heading', { name: browserTitle, exact: true }).waitFor();
   ok('Synthetic records persist across browser reload');
   const logout = page.waitForResponse(response => response.url() === dev + '/api/auth/logout' && response.request().method() === 'POST');

@@ -31,25 +31,30 @@ export function sortTickets(rows:readonly Row[],sort:TicketSort=defaultTicketSor
 }
 export function filterTickets(rows:readonly Row[],input:{project?:string;query?:string;status?:string}={}):Row[] {
  const query=input.query?.trim().toLocaleLowerCase()??'';
- return rows.filter(row=>row.kind==='ticket' && (!input.project||input.project==='全部项目'||(row.project||'通用')===input.project)
+ return rows.filter(row=>row.kind==='ticket' && (!input.project||(row.project||'通用')===input.project)
   && (!input.status||input.status==='all'||input.status==='全部状态'||row.status===input.status)
   && (!query||[row.title,row.text,row.goal,row.project,row.id,row.planId,row.ideaId,row.scope,row.notes].some(value=>value?.toLocaleLowerCase().includes(query))));
 }
 // Board column derived from the persisted status and the Ticket's real Runs:
-// an approved/claimed/delivered development Run or an active Docker Run is in progress,
-// the latest current-revision Run failing is an error. Persisted done always wins.
-export type BoardState={status:TicketStatus;tag?:string};
+// an approved/claimed development Run or an active Docker Run is in progress, a delivered
+// Run (or a manual "waiting for review" Ticket) sits in 已完成 tagged 等待审核, and the
+// latest current-revision Run failing is an error. Persisted done means accepted: archived.
+export type BoardState={status:TicketStatus;tag?:string;archived?:boolean};
+export const REVIEW_TAG='等待审核';
+export const isArchived=(ticket:Row)=>ticket.kind==='ticket'&&ticket.status==='done';
+export const awaitingManualReview=(ticket:Row)=>ticket.status==='waiting'&&ticket.waitingReason==='review';
 export function boardState(ticket:Row,workspaceRuns:readonly WorkspaceRun[],dockerRuns:readonly Run[]):BoardState {
  const persisted=(ticket.status||'todo') as TicketStatus;
- if(persisted==='done')return {status:'done'};
+ if(persisted==='done')return {status:'done',archived:true};
  const runs=workspaceRuns.filter(run=>run.ticketId===ticket.id).sort((a,b)=>b.createdAt-a.createdAt);
  const active=runs.find(run=>isActiveWorkspaceRun(run));
  if(active?.state==='approved')return {status:'running',tag:'已批准，等待 Agent 领取'};
  if(active?.state==='running')return {status:'running',tag:'Agent 开发中'};
- if(active?.state==='review')return {status:'running',tag:'待验收'};
+ if(active?.state==='review')return {status:'done',tag:REVIEW_TAG};
  if(dockerRuns.some(run=>run.ticketId===ticket.id&&isActiveDockerRun(run)))return {status:'running',tag:'Docker 操作运行中'};
  if(active?.state==='pending')return {status:persisted,tag:'开发申请待批准'};
  if(runs[0]?.state==='failed'&&runs[0].revision===ticket.revision)return {status:'error',tag:'开发失败：'+(runs[0].error||'查看执行记录')};
+ if(awaitingManualReview(ticket))return {status:'done',tag:REVIEW_TAG};
  return {status:persisted};
 }
 // Deterministic recommendation: tier first, then fewer unmet dependencies, more
@@ -64,13 +69,13 @@ export function ticketReadiness(tickets:readonly Row[],states:ReadonlyMap<string
   else for(const key of keys){
    const found=matchDependency(ticket,key,all);
    if(found.length!==1){blockers.push(key+'（未找到）');continue;}
-   if(statusOf(found[0])!=='done'){blockers.push(found[0].logicalKey||key);if(statusOf(ticket)!=='done')unlocks.set(found[0].id,(unlocks.get(found[0].id)??0)+1);}
+   if(found[0].status!=='done'){blockers.push(found[0].logicalKey||key);if(ticket.status!=='done')unlocks.set(found[0].id,(unlocks.get(found[0].id)??0)+1);}
   }
   required.set(ticket.id,blockers);
  }
  return new Map(all.map(ticket=>{
   const status=statusOf(ticket),blockers=required.get(ticket.id)??[],count=unlocks.get(ticket.id)??0;
-  const value=status==='done'?{tier:5,label:'已完成',blockers:[]}:status==='running'?{tier:1,label:'进行中',blockers:[]}
+  const value=status==='done'?{tier:5,label:ticket.status==='done'?'已归档':REVIEW_TAG,blockers:[]}:status==='running'?{tier:1,label:'进行中',blockers:[]}
    :blockers.length?{tier:3,label:'等待前置：'+blockers.join('、'),blockers}:status==='waiting'?{tier:2,label:'等待处理',blockers}
    :{tier:0,label:'可执行',blockers};
   return [ticket.id,{...value,unlocks:count}];
@@ -91,14 +96,18 @@ export function ticketExecutionContext(ticket:Row,workspaceRuns:readonly Workspa
 }
 export type TicketAction =
  |{type:'no-op'}|{type:'completed-info';reason:string}|{type:'open-execution';ticketId:string;revision:number}
- |{type:'open-review';runId:string}|{type:'open-status';status:'todo'|'waiting'|'error'}
+ |{type:'open-review';runId:string}|{type:'open-status';status:'todo'|'waiting'|'error'|'done'}
  |{type:'open-active';backend:'workspace'|'docker';runId:string;reason:string};
 export function resolveTicketAction(ticket:Row,target:string|null,workspaceRuns:readonly WorkspaceRun[]=[],dockerRuns:readonly Run[]=[]):TicketAction {
- if(!target||!['todo','running','waiting','done','error'].includes(target))return {type:'no-op'};
- if(ticket.status==='done')return target==='done'?{type:'no-op'}:{type:'completed-info',reason:'此 Ticket 已完成；查看完成证据，返工请使用已有明确入口。'};
+ if(!target||!['todo','running','waiting','done','error','archive'].includes(target))return {type:'no-op'};
+ if(ticket.status==='done')return target==='done'||target==='archive'?{type:'no-op'}:{type:'completed-info',reason:'此 Ticket 已审核归档；查看完成证据，返工请使用已有明确入口。'};
  const context=ticketExecutionContext(ticket,workspaceRuns,dockerRuns);
  const review=context.currentWorkspace.find(r=>r.state==='review');
- if(target==='done'&&review)return {type:'open-review',runId:review.id};
+ // Approving a review (a delivered Run, or a manual waiting-for-review Ticket) archives the Ticket.
+ if((target==='done'||target==='archive')&&review)return {type:'open-review',runId:review.id};
+ if(target==='archive'&&!context.activeWorkspace&&!context.activeDocker&&awaitingManualReview(ticket))
+  return ticket.evidence?.trim()?{type:'open-status',status:'done'}:{type:'completed-info',reason:'审核通过前请先在 Ticket 详情中填写验收证据。'};
+ if(target==='archive')return {type:'completed-info',reason:'此 Ticket 没有等待审核的结果。'};
  if(context.activeWorkspace)return {type:'open-active',backend:'workspace',runId:context.activeWorkspace.id,reason:'此 Ticket 有活动开发 Run，请使用其批准、取消或验收操作。'};
  if(context.activeDocker)return {type:'open-active',backend:'docker',runId:context.activeDocker.id,reason:'此 Ticket 有活动 Docker Run，请查看授权与实际停止状态。'};
  if(target===ticket.status)return {type:'no-op'};

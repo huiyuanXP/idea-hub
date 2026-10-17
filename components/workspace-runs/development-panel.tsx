@@ -7,7 +7,7 @@ export function DevelopmentPanel({tickets,project,onAuthenticationDenied,onRecor
  tickets:Row[];project:string;onAuthenticationDenied:()=>void;onRecordsChanged:()=>void;
 }) {
  const [selected,setSelected]=useState<{id:string;revision:number}|null>(null);
- const visible=tickets.filter(ticket=>project==='全部项目'||(ticket.project||'通用')===project);
+ const visible=tickets.filter(ticket=>(ticket.project||'通用')===project);
  const ticket=visible.find(ticket=>ticket.id===selected?.id&&ticket.revision===selected.revision);
  return <section className="workspace-section" aria-label="本机 Agent 开发执行">
   <h2>本机 Agent 开发执行</h2>

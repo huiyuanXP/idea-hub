@@ -175,21 +175,21 @@ try {
  await connectionCard.getByText('在线',{exact:true}).waitFor();assert.match(await connectionCard.innerText(),new RegExp('客户端 v'+config.version.replaceAll('.','\\.')));
  await connectionCard.getByText('开发 Agent：未就绪',{exact:true}).waitFor();
  await connectionCard.getByText('Synthetic test runner; this is not real model evidence',{exact:true}).waitFor();await screenshot(page,'workspace-connections');
- await page.getByRole('button',{name:'Ticket 看板',exact:false}).click();
+ await page.getByRole('button',{name:'Ticket 看板',exact:false}).click();await page.getByRole('combobox',{name:'项目筛选',exact:true}).selectOption(projectName);
  const developmentSummary=page.getByText('本机 Agent 开发执行 · 申请、进度与验收',{exact:true});
  if(await developmentSummary.count() && !(await developmentSummary.evaluate(summary=>summary.parentElement.open)))await developmentSummary.click();
  const development=page.locator('section[aria-label="本机 Agent 开发执行"]');
  await development.getByLabel('开发 Ticket',{exact:true}).selectOption(plannedTicket.id);
  const runCard=development.locator('[data-run-id="'+prepared.run.id+'"]');
- await runCard.getByText('待验收',{exact:true}).waitFor();await runCard.getByText('查看实际变更',{exact:true}).click();await runCard.getByText('查看测试证据',{exact:true}).click();
+ await runCard.getByText('等待审核',{exact:true}).waitFor();await runCard.getByText('查看实际变更',{exact:true}).click();await runCard.getByText('查看测试证据',{exact:true}).click();
  assert.match(await runCard.innerText(),/actual isolated integration change/);assert.match(await runCard.innerText(),/node --test workspace-loop\.test\.mjs · 退出码 0/);assert.match(await runCard.innerText(),/synthetic test runner/);
  await screenshot(page,'workspace-review');const acceptedResponse=page.waitForResponse(response=>response.url()===fixture.origin+'/api/workspace-runs'&&response.request().method()==='POST'&&response.request().postDataJSON()?.action==='accept');
- await runCard.getByRole('button',{name:'验收通过',exact:true}).click();assert.equal((await acceptedResponse).status(),200);
+ await runCard.getByRole('button',{name:'审核通过并归档',exact:true}).click();assert.equal((await acceptedResponse).status(),200);
  // Acceptance increments the Ticket revision: reopen the explicitly chosen refreshed contract.
  await development.getByRole('button',{name:'重新选择 Ticket',exact:true}).waitFor();
  await development.getByRole('button',{name:'重新选择 Ticket',exact:true}).click();
  await development.getByLabel('开发 Ticket',{exact:true}).selectOption(plannedTicket.id);
- await runCard.getByText('已验收',{exact:true}).waitFor();await screenshot(page,'workspace-accepted');
+ await runCard.getByText('审核通过 · 已归档',{exact:true}).waitFor();await screenshot(page,'workspace-accepted');
  const accepted=await owner('/api/workspace-runs?runId='+encodeURIComponent(prepared.run.id));assert.equal(accepted.run.state,'succeeded');
  const ticketAfter=(await mcp.tool('get_ticket',{ticket_id:plannedTicket.id})).ticket;assert.equal(ticketAfter.status,'done');assert.equal(ticketAfter.revision,2);
  const records=await owner('/api/records');assert.ok(records.records.some(record=>record.kind==='history'&&record.recordId===plannedTicket.id&&record.previousRevision===1));

@@ -1,6 +1,6 @@
 "use client";
 import type {WorkspaceRun,OwnerAction} from '../../lib/workspace-runs/types.mts';
-const states:Record<string,string>={pending:'待批准',approved:'等待 Agent',running:'已领取，执行中',review:'待验收',succeeded:'已验收',failed:'失败',cancelled:'已取消'};
+const states:Record<string,string>={pending:'待批准',approved:'等待 Agent',running:'已领取，执行中',review:'等待审核',succeeded:'审核通过 · 已归档',failed:'失败',cancelled:'已取消'};
 export function WorkspaceRunCard({run,current,busy,onAction}:{run:WorkspaceRun;current:boolean;busy:boolean;onAction:(id:string,action:OwnerAction)=>void}) {
  return <article className="idea-card" data-run-id={run.id}>
   <div className="card-top"><strong>{states[run.state]||run.state}</strong><span>{current?'当前修订':'历史修订'} · Ticket v{run.revision}</span></div>
@@ -11,7 +11,7 @@ export function WorkspaceRunCard({run,current,busy,onAction}:{run:WorkspaceRun;c
   <div className="card-actions">
    {current&&run.state==='pending'&&<><button type="button" className="primary" disabled={busy} onClick={()=>onAction(run.id,'approve')}>批准开发</button><button type="button" className="secondary" disabled={busy} onClick={()=>onAction(run.id,'reject')}>拒绝</button></>}
    {['pending','approved','running','review'].includes(run.state)&&<button type="button" className="secondary" disabled={busy} onClick={()=>onAction(run.id,'cancel')}>取消任务</button>}
-   {current&&run.state==='review'&&<><button type="button" className="primary" disabled={busy} onClick={()=>onAction(run.id,'accept')}>验收通过</button><button type="button" className="secondary" disabled={busy} onClick={()=>onAction(run.id,'rework')}>要求返工</button></>}
+   {current&&run.state==='review'&&<><button type="button" className="primary" disabled={busy} onClick={()=>onAction(run.id,'accept')}>审核通过并归档</button><button type="button" className="secondary" disabled={busy} onClick={()=>onAction(run.id,'rework')}>要求返工</button></>}
    {current&&['failed','cancelled'].includes(run.state)&&<button type="button" className="secondary" disabled={busy} onClick={()=>onAction(run.id,'rework')}>要求返工</button>}
   </div>
  </article>;
