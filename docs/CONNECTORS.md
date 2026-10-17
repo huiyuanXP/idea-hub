@@ -61,4 +61,14 @@ node /absolute/project/.agent-task-hub/runtime/1.0.0/cli.mjs doctor --workspace 
 node /absolute/project/.agent-task-hub/runtime/1.0.0/cli.mjs agent --workspace /absolute/project --access api --api-base-url https://gateway.example/v1 --api-key-env GATEWAY_API_KEY --api-model model-name
 ```
 
+### 实时转录与引导/打断
+
+开发 Run 中三种接入方式都把模型事件统一成转录条目，经 `transcript.mjs` 脱敏、截断、每 400 ms 或 50 条批量上送；上送失败只写 stderr，不让 Run 失败。客户端每秒领取所有者输入并回报结果，三种方式都声明支持引导和打断：
+
+- Codex：开发 Run 不再使用 `--ephemeral` 并记录 thread id；引导在当前轮次成功结束后用 `codex exec resume <thread> -` 带消息续跑，打断先停止进程组再以同样方式续跑；thread id 尚未产生时的打断回报 rejected。
+- Claude Code：以 `--input-format stream-json` 运行并保持 stdin 打开，引导直接写入新的 user 消息；打断停止进程组并以 `--resume <session>` 续跑。会话因此会持久化到本机 Claude 历史。
+- 直接 API Call：引导在下一次模型请求前插入 user 消息；打断中止当前请求或命令，插入消息后继续。
+
+续跑沿用原截止时间、租约、沙箱和 Ticket 范围声明，测试收据跨段累积，结构化结果取最后一段。规划作业不接受输入。修改后的客户端运行时需要重新打包并刷新已安装的 `.agent-task-hub` 运行时才生效。
+
 `connection.json` 只保存端点、模型和密钥环境变量名；密钥只从运行 Agent 的进程环境读取，不写入文件、心跳或 Hub。就绪检查真实请求 `/models` 并确认所选模型可用，失败原因（如未设置变量或 401）作为 Agent 错误显示在连接页面。规划时模型只能使用只读的列目录、读文件和 ripgrep 搜索工具；开发时在隔离 worktree 内额外使用写文件、精确替换和运行命令工具，路径限定在 worktree 内且不可修改 `.git`，命令进程不继承 API 密钥，push、remote、Git 配置和 npm publish 被拒绝。测试类命令的退出码和输出作为实际收据交付，交付合同与 Codex 方式相同。

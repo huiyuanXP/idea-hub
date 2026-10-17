@@ -21,6 +21,14 @@
 
 模型认证缺失、命令执行失败、空结果和未通过检查都必须显示真实原因。客户端报告是本机 Agent 的证据来源，与下面的 Docker 签名收据分开。
 
+### 实时转录与所有者输入
+
+开发 Run 运行时，客户端把 Agent 的每一步写入只追加的转录（`workspace_run_transcript`），种类为 message、reasoning、command_start、command_output、file_change、tool_call、tool_result、error、result、input_echo 和 system，并以 stepId 关联命令与输出、工具调用与结果。客户端和服务端都会先脱敏（Bearer token、`sk-` 密钥、本机 token/路径）；单条正文不超过 32000 字符，超长由客户端截断并标记 truncated；每个 Run 最多 20000 条或 8 MiB，达到上限时写入一条 `system:limit` 条目，此后的追加被接受但不保存，Run 不因此失败。同一条目 id 重放幂等，内容不同返回 409。转录和输入行不可修改或删除，输入状态只能 queued → delivered → applied/rejected 前进。
+
+所有者用 `GET /api/workspace-runs?runId=…&transcriptAfter=N` 分页读取，或用 `GET /api/workspace-runs/stream?runId=…&after=N` 订阅 SSE（transcript、inputs、capabilities、state、end 事件，15 秒心跳，单连接最长 10 分钟后由浏览器带游标重连）；未登录 401，非所有者 404。`POST {action:'input',runId,requestId,mode:'guide'|'interrupt',text}` 只在 Run 为 running 时接受（否则 409），requestId 幂等，文本不超过 4000 字符，并同步写入 input_echo 条目；runner 声明不支持的方式返回 409 `MODE_UNSUPPORTED`。输入属于所有者给 Agent 的提示，不修改 Ticket 修订，也不扩大已批准的 workspace/operation 范围。
+
+持有当前租约的客户端通过 `/api/connector/agent` 的 `transcript`、`inputs`（领取并标记 delivered，未确认的会重新下发）、`input-ack`（applied/rejected 并附原因）和 `capabilities` 动作工作；续租响应附带 `pendingInputs`。Run 离开 running 后，剩余未处理的输入在下次读取时标记为 rejected（“Run ended before delivery”）。
+
 接口为 /api/workspace-runs 的 owner 操作和 /api/connector/agent 的项目客户端领取/续租/回报。网页展示实际授权与执行状态，不能用文本 status 字段替换它们。
 
 ## 固定 Docker 操作

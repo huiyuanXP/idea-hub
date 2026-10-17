@@ -3,21 +3,22 @@ import type { LocalDatabase,SqlValue } from '../database.mts';
 import type { ConnectorPrincipal,OwnerAction,PrepareInput,RunRow,WorkspaceEvent,WorkspaceRun } from './types.mts';
 import { evidence,integer,invalid,logText,object,text,WorkspaceError } from './validation.mts';
 import { dependencyKeys } from '../tickets/dependencies.mts';
+import { notifyRun } from './notify.mts';
 
 export const WORKSPACE_LEASE_MS=30000;
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
-const redact=(value:string)=>value.replace(/Bearer\s+\S+/gi,'Bearer [redacted]').replace(/\b(sk-[A-Za-z0-9_-]+)\b/g,'[redacted]');
+export const redact=(value:string)=>value.replace(/Bearer\s+\S+/gi,'Bearer [redacted]').replace(/\b(sk-[A-Za-z0-9_-]+)\b/g,'[redacted]');
 // These predicates execute at the write boundary, after all asynchronous reads.
-const connectionScope=`EXISTS(SELECT 1 FROM workspace_connections c JOIN workspace_projects p ON p.id=c.project_id AND p.owner=c.owner
+export const connectionScope=`EXISTS(SELECT 1 FROM workspace_connections c JOIN workspace_projects p ON p.id=c.project_id AND p.owner=c.owner
  WHERE c.id=workspace_runs.connection_id AND c.owner=workspace_runs.owner AND c.project_id=workspace_runs.project_id
  AND p.name=workspace_runs.project AND c.workspace=workspace_runs.workspace AND c.revoked_at IS NULL AND c.token_expires_at>?
  AND EXISTS(SELECT 1 FROM json_each(c.capabilities) WHERE value='execute'))`;
 const ticketScope=`EXISTS(SELECT 1 FROM records t WHERE t.id=workspace_runs.ticket_id AND t.owner=workspace_runs.owner AND t.kind='ticket'
  AND t.revision=workspace_runs.ticket_revision AND t.body=workspace_runs.ticket_body
  AND COALESCE(NULLIF(json_extract(t.body,'$.project'),''),'通用')=workspace_runs.project)`;
-const scope=`${connectionScope} AND ${ticketScope}`;
+export const scope=`${connectionScope} AND ${ticketScope}`;
 
-async function row(db:LocalDatabase,owner:string,id:string):Promise<RunRow> {
+export async function row(db:LocalDatabase,owner:string,id:string):Promise<RunRow> {
  text(id);const found=await db.prepare('SELECT * FROM workspace_runs WHERE owner=? AND id=?').bind(owner,id).first<RunRow>();
  if(!found)throw new WorkspaceError(404,'Workspace Run not found','NOT_FOUND');return found;
 }
@@ -55,7 +56,7 @@ export async function listWorkspaceRuns(db:LocalDatabase,owner:string,input:{tic
 }
 
 /** Expiry never requeues a started Run. Physical occupancy survives lease loss until the hard deadline. */
-async function reconcile(db:LocalDatabase,owner:string,now:number) {
+export async function reconcile(db:LocalDatabase,owner:string,now:number) {
  await db.batch([
   db.prepare(`UPDATE workspace_runs SET state='failed',cancel_requested=1,error=CASE WHEN deadline_at<=? THEN 'Execution timeout' WHEN lease_expires_at<=? THEN 'Agent lease expired' ELSE 'Ticket or connection scope changed' END,
    version=version+1,updated_at=? WHERE owner=? AND state IN ('pending','approved','running','review') AND
@@ -123,10 +124,10 @@ export async function decideWorkspaceRun(db:LocalDatabase,owner:string,id:string
   if(current.state===destination && ['approve','cancel','accept'].includes(action))return dto(db,current);
   throw new WorkspaceError(409,'Ticket revision, connection or Run state changed','SCOPE_CONFLICT');
  }
- return getWorkspaceRun(db,owner,id);
+ notifyRun(id);return getWorkspaceRun(db,owner,id);
 }
 
-function principal(input:ConnectorPrincipal) {
+export function principal(input:ConnectorPrincipal) {
  if(!input.capabilities.includes('execute'))throw new WorkspaceError(403,'Connector execution capability required','CAPABILITY_DENIED');
  return {...input,capabilities:[...input.capabilities]};
 }
@@ -167,19 +168,19 @@ export async function claimWorkspaceRun(db:LocalDatabase,identity:ConnectorPrinc
     AND NOT EXISTS(SELECT 1 FROM workspace_runs held WHERE held.owner=workspace_runs.owner AND held.ticket_id=workspace_runs.ticket_id AND held.generation>0 AND held.physical_closed_at IS NULL)
     AND NOT EXISTS(SELECT 1 FROM workspace_runs held WHERE held.connection_id=workspace_runs.connection_id AND held.generation>0 AND held.physical_closed_at IS NULL)
     ${depGuard?`AND ${depGuard}`:''}`).bind(hash(leaseToken),leaseExpiresAt,deadline,now,actor.owner,run.id,actor.id,actor.projectId,actor.project,now,...deps).run();
-   if(updated.meta.changes===1)return {job:{id:run.id,leaseToken,ticketId:run.ticket_id,revision:run.ticket_revision,body:JSON.parse(run.ticket_body),leaseExpiresAt,timeoutMs:run.timeout_ms}};
+   if(updated.meta.changes===1){notifyRun(run.id);return {job:{id:run.id,leaseToken,ticketId:run.ticket_id,revision:run.ticket_revision,body:JSON.parse(run.ticket_body),leaseExpiresAt,timeoutMs:run.timeout_ms}};}
   }catch(error){if(!String(error).includes('UNIQUE constraint'))throw error;}
  }
  return {job:null};
 }
-async function machineRun(db:LocalDatabase,actor:ConnectorPrincipal,id:string,leaseToken:string) {
+export async function machineRun(db:LocalDatabase,actor:ConnectorPrincipal,id:string,leaseToken:string) {
  text(id);text(leaseToken,200,'lease token');
  const run=await row(db,actor.owner,id);
  if(run.connection_id!==actor.id || run.project_id!==actor.projectId || run.project!==actor.project || run.lease_hash!==hash(leaseToken))throw new WorkspaceError(409,'Workspace lease does not belong to this connector','LEASE_CONFLICT');
  return run;
 }
-const machineScope='owner=? AND id=? AND connection_id=? AND project_id=? AND project=? AND lease_hash=? AND generation=?';
-function machineParams(actor:ConnectorPrincipal,run:RunRow,token:string):SqlValue[]{return [actor.owner,run.id,actor.id,actor.projectId,actor.project,hash(token),run.generation];}
+export const machineScope='owner=? AND id=? AND connection_id=? AND project_id=? AND project=? AND lease_hash=? AND generation=?';
+export function machineParams(actor:ConnectorPrincipal,run:RunRow,token:string):SqlValue[]{return [actor.owner,run.id,actor.id,actor.projectId,actor.project,hash(token),run.generation];}
 export async function renewWorkspaceRun(db:LocalDatabase,identity:ConnectorPrincipal,id:string,leaseToken:string) {
  const actor=principal(identity),now=Date.now();await reconcile(db,actor.owner,now);const run=await machineRun(db,actor,id,leaseToken);
  if(run.cancel_requested || run.state==='cancelled' || run.state==='failed')return {leaseExpiresAt:run.lease_expires_at,cancelRequested:true};
@@ -188,7 +189,8 @@ export async function renewWorkspaceRun(db:LocalDatabase,identity:ConnectorPrinc
   AND state='running' AND cancel_requested=0 AND physical_closed_at IS NULL AND lease_expires_at>? AND deadline_at>? AND ${scope}`)
   .bind(leaseExpiresAt,now,...machineParams(actor,run,leaseToken),now,now,now).run();
  if(result.meta.changes!==1)throw new WorkspaceError(409,'Workspace lease expired or scope changed','LEASE_CONFLICT');
- return {leaseExpiresAt,cancelRequested:false};
+ const pending=await db.prepare("SELECT count(*) AS count FROM workspace_run_inputs WHERE run_id=? AND state='queued'").bind(run.id).first<{count:number}>();
+ return {leaseExpiresAt,cancelRequested:false,pendingInputs:pending?.count??0};
 }
 export async function eventWorkspaceRun(db:LocalDatabase,identity:ConnectorPrincipal,id:string,leaseToken:string,input:{eventId:string;stage:string;message:string}) {
  object(input,['eventId','stage','message']);const copied={...input};text(copied.eventId,128,'event ID');text(copied.stage,64,'event stage');
@@ -232,7 +234,7 @@ export async function completeWorkspaceRun(db:LocalDatabase,identity:ConnectorPr
   }
   throw new WorkspaceError(409,'Result cannot be delivered after lease, revision or approval loss','LEASE_CONFLICT');
  }
- return {run:await getWorkspaceRun(db,actor.owner,id)};
+ notifyRun(id);return {run:await getWorkspaceRun(db,actor.owner,id)};
 }
 export async function failWorkspaceRun(db:LocalDatabase,identity:ConnectorPrincipal,id:string,leaseToken:string,error:string) {
  logText(error,4000,'failure summary');error=redact(error);const actor=principal(identity),now=Date.now(),run=await machineRun(db,actor,id,leaseToken);
@@ -243,5 +245,5 @@ export async function failWorkspaceRun(db:LocalDatabase,identity:ConnectorPrinci
   WHERE ${machineScope} AND state IN ('running','failed','cancelled') AND physical_closed_at IS NULL AND ${connectionScope}`)
   .bind(error,now,now,...machineParams(actor,run,leaseToken),now).run();
  if(updated.meta.changes!==1)throw new WorkspaceError(409,'Failure does not match a live process lease','LEASE_CONFLICT');
- return {run:await getWorkspaceRun(db,actor.owner,id)};
+ notifyRun(id);return {run:await getWorkspaceRun(db,actor.owner,id)};
 }

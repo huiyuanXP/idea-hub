@@ -34,12 +34,14 @@ export function useTicketExecution({ticketId,revision,project,onAuthenticationDe
    if(!preserveError){setError('');setConflict(false);}
   }catch(failure){if(valid()){setError(failure instanceof Error?failure.message:'暂时无法读取执行状态');setLoading(false);}}
  },[request,ticketId]);
+ // A running Run has its own live console stream, so the summary poll can slow down.
+ const liveConsole=runs.some(run=>run.state==='running');
  useEffect(()=>{
   const generation=lifecycle,reads=sequence;
   const timer=setTimeout(()=>void refresh(),0);
-  const poll=setInterval(()=>{if(!writing.current&&document.visibilityState==='visible')void refresh(true);},5000);
+  const poll=setInterval(()=>{if(!writing.current&&document.visibilityState==='visible')void refresh(true);},liveConsole?15000:5000);
   return ()=>{clearTimeout(timer);clearInterval(poll);++generation.current;++reads.current;};
- },[refresh]);
+ },[refresh,liveConsole]);
  const availableConnections=connections.filter(c=>!c.revokedAt&&c.project===project&&c.capabilities.includes('execute'));
  const connection=connectionId?availableConnections.find(c=>c.id===connectionId):availableConnections[0];
  async function write(body:unknown,recordsChanged=false) {

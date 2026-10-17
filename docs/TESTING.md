@@ -34,6 +34,8 @@ npm run test:execution:domain 运行不依赖 Docker 的执行领域检查。npm
 `npm run test:next-steps` 使用全新 SQLite 和真实 Chromium 验证点子接入项目传递、手工 Plan 保存、空看板起步、Ticket 创建及按需展开执行入口，并将截图与结果保留在 `test-results/new-user-next-steps/`。需要已有 `tests/browser` 的 Playwright 与可信 Chromium，测试仅访问自己的 loopback 服务。
 详情浏览器验证使用 `npm run test:details:browser`（先构建并准备 `tests/browser` 的锁定 Playwright 与 Chromium），新建 SQLite 与合成账户，覆盖只读无写请求、30 个关联任务、长标题、焦点限制/恢复、返回滚动与筛选、草稿确认、隐藏字段保留、真实 409、完成证据定位、手工快照、点子新修订、窄屏和会话失效清理；截图默认写入 `test-results/details`，可用 `DETAIL_EVIDENCE_DIR` 指定私有证据目录。
 
+`npm run test:connectors` 还包含实时控制台的服务端与客户端检查：`tests/workspace-runs/live.test.mjs` 在全新 SQLite 上覆盖转录追加/分页/上限/脱敏、所有者输入状态与 SSE 推送、重连和终态关闭；`tests/connector-client/transcript.test.mjs` 与 `live-runner.test.mjs` 用合成 runner 和模拟服务验证事件映射、批量上送、引导续跑与打断后在同一 worktree 继续。`npm run test:live-console:browser`（需先构建）在锁定 Chromium 中验证控制台实时出现、跟随/暂停、引导从已排队到已应用、终态禁用与刷新回放，截图写入 `test-results/live-console`。这些都不代表真实模型调用。
+
 `npm run test:planning:browser` 同样覆盖折叠规划详情中的租约时钟、失效恢复与投递退避，原因与冷却在展开前可见；这些检查不测量用户理解能力，也不代替真实模型开发或 Docker 后端验证。
 
 整合看板验收：`node --experimental-strip-types tests/browser/board-interactions.mjs`；项目目录：`node --experimental-strip-types tests/connectors/project-catalog-browser.mjs`；共享执行：`node --experimental-strip-types tests/tickets/execution-browser.mjs`。它们均使用 fresh SQLite、loopback 和已有锁定浏览器依赖，覆盖真实页面交互与API响应。看板采用原生 PointerEvent 适配，可信触屏通过 Chromium CDP 注入；脚本目标坐标使用列与视口的可见交集。

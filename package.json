@@ -41,6 +41,7 @@
     "test:workspace-loop": "node --experimental-strip-types tests/workspace-loop.mjs",
     "test:next-steps": "node --experimental-strip-types tests/browser/next-steps.mjs",
     "test:details:browser": "node --experimental-strip-types tests/details/browser.mjs",
+    "test:live-console:browser": "node --experimental-strip-types tests/details/live-console-browser.mjs",
     "test:mcp:task-read-bytes": "node --experimental-strip-types --test tests/task-reads/*.test.mjs && node --experimental-strip-types tests/mcp/task-read-bytes-native.mjs",
     "test:execution:workers": "node --experimental-strip-types --test --test-concurrency=1 tests/execution/workers.test.mjs tests/execution/worker-guard.test.mjs tests/execution/worker-leases.test.mjs tests/execution/worker-actions.test.mjs && node --experimental-strip-types tests/execution/worker-native.mjs && node --experimental-strip-types tests/execution/worker-leases-native.mjs",
     "execution:consume": "node --experimental-strip-types runner/consumer.mjs",

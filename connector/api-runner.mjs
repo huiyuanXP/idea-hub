@@ -74,8 +74,8 @@ function runShell(cwd, commandLine, timeoutMs, signal, keyEnv) {
     let output = '', done = false;
     const kill = () => { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* exited */ } };
     const timer = setTimeout(() => { output += '\n[command timed out]'; kill(); }, timeoutMs);
-    const abort = () => { output += '\n[run cancelled]'; kill(); };
-    signal.addEventListener('abort', abort, { once: true });
+    const abort = () => { output += `\n[${signal.reason?.message === 'Interrupted by owner' ? 'interrupted by owner' : 'run cancelled'}]`; kill(); };
+    if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
     const append = data => { if (output.length < 400000) output += data; };
     child.stdout.on('data', append); child.stderr.on('data', append);
     const finish = code => { if (done) return; done = true; clearTimeout(timer); signal.removeEventListener('abort', abort); kill(); accept({ code, output }); };
@@ -88,7 +88,27 @@ const str = description => ({ type: 'string', description });
 
 // Runs one planning or development job through a tool-calling loop. It returns
 // the same { result, tests, agentSession } contract as the Codex runner.
-export async function runApi({ config, cwd, directory, schema, prompt, sandbox, timeoutMs, signal, event }) {
+const summarize = (name, args) => {
+  if (name === 'write_file') return JSON.stringify({ path: args.path, bytes: typeof args.content === 'string' ? Buffer.byteLength(args.content) : 0 });
+  return JSON.stringify(args ?? {});
+};
+// Transcript entries [kind, body, { stepId }] for one API tool call before it runs.
+export function mapApiToolCall(call, args) {
+  const name = String(call.function?.name ?? 'tool'), opts = { stepId: call.id ?? null };
+  if (name === 'run_command') return [['command_start', { command: String(args?.command ?? '') }, opts]];
+  if (name === 'submit_result') return [['tool_call', { name, input: '[structured result]' }, opts]];
+  return [['tool_call', { name, input: summarize(name, args) }, opts]];
+}
+// Transcript entries for a finished API tool call.
+export function mapApiToolResult(call, args, output, { exitCode = null, failed = false } = {}) {
+  const name = String(call.function?.name ?? 'tool'), opts = { stepId: call.id ?? null };
+  if (name === 'run_command') return [['command_output', { command: String(args?.command ?? ''), output: String(output), exitCode: failed ? null : exitCode }, opts]];
+  const entries = [['tool_result', { name, output: String(output), isError: failed }, opts]];
+  if (!failed && (name === 'write_file' || name === 'replace_in_file') && args?.path) entries.push(['file_change', { changes: [{ path: String(args.path), kind: 'update' }] }, opts]);
+  return entries;
+}
+
+export async function runApi({ config, cwd, directory, schema, prompt, sandbox, timeoutMs, signal, event, transcript, inputs }) {
   const selection = await apiSelection(config.api, config.workspace);
   Object.defineProperty(config, 'runtimeSecrets', { value: [process.env[selection.keyEnv]].filter(Boolean), writable: true, configurable: true });
   await privateDirectory(directory);
@@ -108,38 +128,82 @@ export async function runApi({ config, cwd, directory, schema, prompt, sandbox, 
   ];
   const system = `You are an autonomous coding agent operating through tools in the repository at the workspace root. ${writable ? 'You may edit files inside the workspace and run commands there.' : 'This is read-only: inspect files but change nothing.'} Paths are relative to the workspace root. Finish by calling submit_result exactly once with the result object matching its schema. Do not reply with plain text instead of tools.`;
   const messages = [{ role: 'system', content: system }, { role: 'user', content: prompt }];
-  const transcript = join(directory, 'api-transcript.jsonl');
-  await writeFile(transcript, '', { mode: 0o600 });
-  for (let turn = 0; turn < MAX_TURNS; turn++) {
-    if (deadline.aborted) throw Error(signal.aborted ? String(signal.reason?.message || signal.reason || 'Run cancelled') : 'Model API execution timed out');
-    const body = { model: selection.model, messages, tools, tool_choice: 'auto', ...(selection.reasoning ? { reasoning_effort: selection.reasoning } : {}) };
-    const response = await apiFetch(selection, '/chat/completions', { method: 'POST', body: JSON.stringify(body) }, deadline, timeoutMs);
-    const message = response.choices?.[0]?.message;
-    if (!message) throw Error('Model API returned no message');
-    const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-    messages.push({ role: 'assistant', content: message.content || '', ...(calls.length ? { tool_calls: calls } : {}) });
-    await writeFile(transcript, JSON.stringify({ turn, content: redact(message.content || '', config, 4000), tools: calls.map(call => call.function?.name) }) + '\n', { flag: 'a' });
-    if (!calls.length) { messages.push({ role: 'user', content: 'Continue using tools. When finished, call submit_result with the final result.' }); continue; }
-    for (const call of calls) {
-      let output;
-      try {
-        let args;
-        try { args = JSON.parse(call.function?.arguments || '{}'); } catch { throw Error('Tool arguments are not valid JSON'); }
-        const name = call.function?.name;
-        if (name === 'submit_result') {
-          const result = args.result && typeof args.result === 'object' && !schema.properties.result ? args.result : args;
-          const shaped = conform(schema, result, 'result');
-          await writeFile(join(directory, 'result.json'), JSON.stringify(shaped), { mode: 0o600 });
-          return { result: shaped, tests: receipts, agentSession: session };
-        }
-        output = await execute(name, args);
-      } catch (error) { output = `Error: ${redact(error, config, 2000)}`; }
-      messages.push({ role: 'tool', tool_call_id: call.id, content: String(output).slice(0, MAX_READ) });
-    }
+  const transcriptFile = join(directory, 'api-transcript.jsonl');
+  await writeFile(transcriptFile, '', { mode: 0o600 });
+  const emit = entries => { for (const [kind, body, opts] of entries) transcript?.emit(kind, body, opts); };
+  // Owner inputs: guides join the conversation before the next request; an interrupt
+  // aborts the in-flight request or command of the current turn first.
+  const pending = [];
+  let turnController = new AbortController(), interrupted = false, finished = false;
+  if (inputs) {
+    await inputs.capabilities({ runner: 'api', guide: true, interrupt: true, note: 'Guides are added before the next model request; interrupts abort the current request or command first.' });
+    inputs.onInput(input => {
+      if (finished) return inputs.ack(input.id, 'rejected', 'API run already finished');
+      pending.push(input);
+      if (input.mode === 'interrupt') { interrupted = true; turnController.abort(Error('Interrupted by owner')); }
+    });
   }
-  throw Error(`Model did not submit a result within ${MAX_TURNS} turns`);
+  const injectInputs = () => {
+    for (const input of pending.splice(0)) {
+      messages.push({ role: 'user', content: input.mode === 'interrupt' ? `The owner interrupted the previous step. Follow this instruction, then continue the same approved Ticket:\n${input.text}` : `Owner guidance for this Run (continue the same approved Ticket):\n${input.text}` });
+      inputs?.ack(input.id, 'applied');
+    }
+  };
+  const stopped = () => Error(signal.aborted ? String(signal.reason?.message || signal.reason || 'Run cancelled') : 'Model API execution timed out');
+  try {
+    for (let turn = 0; turn < MAX_TURNS; turn++) {
+      if (deadline.aborted) throw stopped();
+      interrupted = false; turnController = new AbortController();
+      injectInputs();
+      const turnSignal = AbortSignal.any([deadline, turnController.signal]);
+      const body = { model: selection.model, messages, tools, tool_choice: 'auto', ...(selection.reasoning ? { reasoning_effort: selection.reasoning } : {}) };
+      let response;
+      try { response = await apiFetch(selection, '/chat/completions', { method: 'POST', body: JSON.stringify(body) }, turnSignal, timeoutMs); }
+      catch (error) {
+        if (interrupted && !deadline.aborted) { transcript?.emit('system', { text: 'Model request aborted by owner interrupt' }); continue; }
+        if (deadline.aborted) throw stopped();
+        transcript?.emit('error', { message: String(error.message || error) });
+        throw error;
+      }
+      const message = response.choices?.[0]?.message;
+      if (!message) throw Error('Model API returned no message');
+      const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+      messages.push({ role: 'assistant', content: message.content || '', ...(calls.length ? { tool_calls: calls } : {}) });
+      if (message.content) transcript?.emit('message', { text: String(message.content) });
+      if (response.usage) transcript?.emit('result', { usage: response.usage });
+      await writeFile(transcriptFile, JSON.stringify({ turn, content: redact(message.content || '', config, 4000), tools: calls.map(call => call.function?.name) }) + '\n', { flag: 'a' });
+      if (!calls.length) { messages.push({ role: 'user', content: 'Continue using tools. When finished, call submit_result with the final result.' }); continue; }
+      for (const call of calls) {
+        let output, args = {}, exitCode = null, failed = false;
+        // Every tool call needs a tool message; skipped calls after an interrupt say so.
+        if (interrupted) { messages.push({ role: 'tool', tool_call_id: call.id, content: 'Skipped: the owner interrupted this step' }); continue; }
+        try {
+          try { args = JSON.parse(call.function?.arguments || '{}'); } catch { args = {}; throw Error('Tool arguments are not valid JSON'); }
+          const name = call.function?.name;
+          emit(mapApiToolCall(call, args));
+          if (name === 'submit_result') {
+            const result = args.result && typeof args.result === 'object' && !schema.properties.result ? args.result : args;
+            const shaped = conform(schema, result, 'result');
+            await writeFile(join(directory, 'result.json'), JSON.stringify(shaped), { mode: 0o600 });
+            emit(mapApiToolResult(call, args, 'Result submitted'));
+            finished = true;
+            return { result: shaped, tests: receipts, agentSession: session };
+          }
+          const executed = await execute(name, args, turnSignal);
+          output = executed.output ?? executed; exitCode = executed.code ?? null;
+        } catch (error) { output = `Error: ${redact(error, config, 2000)}`; failed = true; }
+        emit(mapApiToolResult(call, args, output, { exitCode, failed }));
+        messages.push({ role: 'tool', tool_call_id: call.id, content: String(output).slice(0, MAX_READ) });
+      }
+      if (deadline.aborted) throw stopped();
+    }
+    throw Error(`Model did not submit a result within ${MAX_TURNS} turns`);
+  } finally {
+    finished = true;
+    for (const input of pending.splice(0)) inputs?.ack(input.id, 'rejected', 'API run ended before the input was applied');
+  }
 
-  async function execute(name, args) {
+  async function execute(name, args, turnSignal) {
     if (name === 'list_files') {
       const base = await inside(root, args.path || '.');
       const result = await runShell(root, `git ls-files --cached --others --exclude-standard -- ${JSON.stringify(relative(root, base) || '.')} | head -2000`, 15000, deadline, selection.keyEnv);
@@ -178,13 +242,14 @@ export async function runApi({ config, cwd, directory, schema, prompt, sandbox, 
       if (!commandLine.trim()) throw Error('command is required');
       if (/\bgit\s+(?:push|remote|config)\b|\bnpm\s+publish\b/.test(commandLine)) throw Error('Pushing, publishing and Git configuration changes are not permitted');
       await event?.('agent', `Command started: ${redact(commandLine, config, 300)}`);
-      const result = await runShell(root, commandLine, Math.min(600000, timeoutMs), deadline, selection.keyEnv);
+      const result = await runShell(root, commandLine, Math.min(600000, timeoutMs), turnSignal, selection.keyEnv);
       const output = redact(result.output, config, MAX_OUTPUT);
-      if (TEST_COMMAND.test(commandLine)) {
+      const aborted = turnSignal.aborted && !deadline.aborted;
+      if (TEST_COMMAND.test(commandLine) && !aborted) {
         receipts.push({ command: redact(commandLine, config), exitCode: result.code, output });
         await event?.('checking', `Test command finished (${result.code}): ${redact(commandLine, config, 300)}`);
       }
-      return `exit code ${result.code}\n${output}`;
+      return { code: aborted ? null : result.code, output: `exit code ${aborted ? 'interrupted' : result.code}\n${output}` };
     }
     throw Error(`Unknown tool ${name}`);
   }

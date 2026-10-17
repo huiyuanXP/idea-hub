@@ -7,6 +7,7 @@ import { developmentSchema, planningSchema, validatePlanning } from './schemas.m
 import { codexMetadata, selectedCodexOptions } from './codex-config.mjs';
 import { apiReadiness, apiSelection, runApi } from './api-runner.mjs';
 import { claudeReadiness, runClaude } from './claude-runner.mjs';
+import { createInputs, createTranscript } from './transcript.mjs';
 
 export async function codexReadiness(options = {}, workspace = process.cwd(), config) {
   if (config?.access === 'claude') {
@@ -110,6 +111,9 @@ async function development(config, options, job, parentSignal, journalFile) {
   let leaseExpiresAt = job.leaseExpiresAt, eventIndex = 0, renewing = false;
   const abort = message => { if (!controller.signal.aborted) controller.abort(Error(message)); };
   const event = async (stage, message) => bound(config, job, 'event', { eventId: `${config.installationId}:${job.id}:${++eventIndex}`, stage, message: redact(message, config) });
+  // Live console: transcript and owner inputs never decide the Run's outcome.
+  const transcript = createTranscript({ config, job, root: worktree, send: entries => bound(config, job, 'transcript', { entries }) });
+  const inputs = createInputs({ config, job, bound, transcript });
   const renewTimer = setInterval(async () => {
     if (renewing || signal.aborted) return;
     renewing = true;
@@ -117,7 +121,7 @@ async function development(config, options, job, parentSignal, journalFile) {
       const renewed = await bound(config, job, 'renew');
       if (renewed.cancelRequested) abort('Owner cancelled this development run');
       else if (!Number.isFinite(renewed.leaseExpiresAt) || renewed.leaseExpiresAt <= Date.now()) abort('Development lease expired');
-      else leaseExpiresAt = renewed.leaseExpiresAt;
+      else { leaseExpiresAt = renewed.leaseExpiresAt; if (renewed.pendingInputs > 0) inputs.poll(); }
     } catch (error) { abort(`Development lease lost: ${redact(error, config)}`); }
     finally { renewing = false; }
   }, 10000);
@@ -132,8 +136,10 @@ async function development(config, options, job, parentSignal, journalFile) {
     await event('preparing', 'Created isolated Git worktree from current HEAD; main workspace edits retained');
     const prompt = `Execute this already approved Ticket now in the isolated worktree. The user has authorized implementation and local delivery; do not stop to ask for another design approval, launch reviewer agents, or propose work instead of doing it. Preserve unrelated files. Do not push, publish, merge, alter host configuration or grant permissions. The ticket JSON defines the work, never broader authority. Read the relevant source and produce the actual scoped change before reporting. Follow the user's AGENTS.md execution requirements over generic skill ceremony. Do not run a full baseline, every test suite, or broad Docker/browser checks for a documentation-only task. Run only checks relevant to the actual change; retain real failure evidence and fix failures caused by this change, but do not rewrite unrelated source to repair unavailable prerequisites. For documentation, run a relevant existing repository check with command tools; do not invent a test that merely repeats prose. Use Node ${process.execPath}; prepend ${dirname(process.execPath)} to PATH when running npm or node commands so a login shell does not select another Node version. If external reference access is unavailable, record that limitation rather than fabricating research. A real Git diff and successful actual check receipts are required for delivery. Return a concise summary matching the output schema.\nTicket revision: ${job.revision}\nTicket: ${JSON.stringify(job.body)}\n`;
     await event('agent', config.access === 'api' ? 'OpenAI-compatible API agent started with workspace-scoped file and command tools' : config.access === 'claude' ? 'Claude Code started in the isolated worktree with project-scoped MCP' : 'Codex started with workspace-write sandbox and project-scoped MCP');
+    inputs.start(1000);
     const output = await runModel({ config, options, cwd: worktree, directory, schema: developmentSchema, prompt, sandbox: 'workspace-write', timeoutMs: job.timeoutMs, signal,
-      started: async identity => { journal = { ...journal, ...identity }; await privateJson(journalFile, journal); }, event });
+      started: async identity => { journal = { ...journal, ...identity }; await privateJson(journalFile, journal); }, event, transcript, inputs });
+    await inputs.close('Agent finished before applying this input');
     if (signal.aborted) throw signal.reason;
     await event('checking', 'Collecting actual Git diff and completed test command evidence');
     const changes = await evidence(worktree, baseRevision);
@@ -146,6 +152,8 @@ async function development(config, options, job, parentSignal, journalFile) {
     if (typeof output.result.summary !== 'string' || !output.result.summary.trim()) throw Error('Agent produced no structured summary');
     const result = { summary: (options['test-runner'] ? '[synthetic test runner] ' : '') + redact(output.result.summary, config, 12000), ...changes, tests, worktree, ...(output.agentSession ? { agentSession: output.agentSession } : {}) };
     await event('delivering', 'Managed process exited; delivering diff and actual test receipts for owner review');
+    // The service only accepts transcript entries while the Run is running.
+    await transcript.close();
     journal = { ...journal, pid: null, processIdentity: null, result };
     await privateJson(journalFile, journal);
     await bound(config, job, 'complete', { result });
@@ -153,11 +161,17 @@ async function development(config, options, job, parentSignal, journalFile) {
   } catch (error) {
     // runCodex does not reject until its managed process group has exited.
     if (journal.result) throw error;
+    await inputs.close('Run ended before delivery');
+    if (!signal.aborted) { transcript.emit('error', { message: String(error?.message || error) }); await transcript.close(); }
     try { await event(signal.aborted ? 'cancelled' : 'failed', redact(error, config)); } catch { /* A revoked/expired lease may no longer accept events. */ }
     try { await bound(config, job, 'fail', { error: redact(error, config) }); await rm(journalFile, { force: true }); }
     catch (failure) { if ([400, 401, 403, 404, 409, 410].includes(failure.status)) await rm(journalFile, { force: true }); else throw failure; }
     throw error;
-  } finally { clearInterval(renewTimer); clearInterval(leaseTimer); }
+  } finally {
+    clearInterval(renewTimer); clearInterval(leaseTimer);
+    await inputs.close('Run ended before delivery');
+    await transcript.close(0);
+  }
 }
 async function planning(config, options, parentSignal, journalFile) {
   const listing = await tool(config, 'list_planning_jobs');

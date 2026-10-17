@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 
 export const VERSION = '1.0.0';
 export const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
-export const RUNTIME_FILES = ['package.json', 'cli.mjs', 'common.mjs', 'codex-config.mjs', 'mcp.mjs', 'agent.mjs', 'runner.mjs', 'supervisor.mjs', 'schemas.mjs', 'api-runner.mjs', 'claude-runner.mjs', 'README.md'];
+export const RUNTIME_FILES = ['package.json', 'cli.mjs', 'common.mjs', 'codex-config.mjs', 'mcp.mjs', 'agent.mjs', 'runner.mjs', 'supervisor.mjs', 'schemas.mjs', 'api-runner.mjs', 'claude-runner.mjs', 'transcript.mjs', 'README.md'];
 export function checkNode() {
   const [major, minor, patch] = process.versions.node.split('.').map(Number);
   if (major < 22 || (major === 22 && (minor < 23 || (minor === 23 && patch < 3)))) throw Error('Node.js 22.23.3 or newer is required');
@@ -76,6 +76,8 @@ export async function request(config, path, body, { signal, timeoutMs = 10000 } 
   if (!response.ok) {
     const error = Error(redact(value.error?.message || value.error || `Service request failed (${response.status})`, config));
     error.status = response.status;
+    if (typeof value.error?.code === 'string') error.code = value.error.code;
+    else if (typeof value.code === 'string') error.code = value.code;
     throw error;
   }
   return value;

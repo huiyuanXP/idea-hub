@@ -20,5 +20,14 @@ export interface WorkspaceRun {
  createdAt:number;updatedAt:number;timeoutMs:number;error:string|null;result:WorkspaceResult|null;
  events:WorkspaceEvent[];eventsCursor:number|null;workspace:string;operation:string;
 }
+export const TRANSCRIPT_KINDS=['message','reasoning','command_start','command_output','file_change','tool_call','tool_result','error','result','input_echo','system'] as const;
+export type TranscriptKind=typeof TRANSCRIPT_KINDS[number];
+/** One persisted console step. body is kind-specific JSON (see docs/EXECUTION.md). */
+export interface TranscriptEntry {id:string;sequence:number;kind:TranscriptKind;stepId:string|null;body:Record<string,unknown>;truncated:boolean;createdAt:number}
+export type InputMode='guide'|'interrupt';
+export type InputState='queued'|'delivered'|'applied'|'rejected';
+export interface RunInput {id:string;requestId:string;sequence:number;mode:InputMode;text:string;state:InputState;reason:string|null;createdAt:number;updatedAt:number}
+export interface RunnerCapabilities {runner:string;guide:boolean;interrupt:boolean;note:string|null}
+export interface TranscriptPage {runId:string;state:RunState;entries:TranscriptEntry[];nextAfter:number;hasMore:boolean;limited:boolean;inputs:RunInput[];capabilities:RunnerCapabilities|null}
 export interface PrepareInput {ticketId:string;revision:number;connectionId:string;requestId:string;timeoutMs:number}
 export type OwnerAction='approve'|'reject'|'cancel'|'accept'|'rework';
