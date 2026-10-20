@@ -418,7 +418,17 @@ export default function Home() {
   };
   const boardStates=new Map<string,BoardState>(allTickets.map(ticket=>[ticket.id,boardState(ticket,boardRuns.workspace,boardRuns.docker)]));
   const readiness=ticketReadiness(allTickets,boardStates);
-  const visibleTickets=sortTickets(filterTickets(tickets,{project,query}).filter(ticket=>stateFilter==="all"||boardStates.get(ticket.id)?.status===stateFilter),ticketSort,readiness);
+  const matchesState=(status?:string)=>stateFilter==="all"||(stateFilter==="active"?status==="todo"||status==="running":status===stateFilter);
+  // Metrics count the selected project with the same board states their target view filters by.
+  const countBoard=(...states:string[])=>inProject(tickets).filter(ticket=>states.includes(boardStates.get(ticket.id)?.status??"")).length;
+  const projectWaiting=inProject(waiting).length;
+  const metrics:[string,string,string,number,string,string?][]=[
+    ["inbox","all","收集的点子",inProject(ideas).length,"个想法"],
+    ["board","active","待推进任务",countBoard("todo","running"),"个 Ticket"],
+    ["review","all","需要你的处理",projectWaiting,"项等待",projectWaiting?"amber":""],
+    ["board","done","已完成",countBoard("done"),"项待审核"],
+  ];
+  const visibleTickets=sortTickets(filterTickets(tickets,{project,query}).filter(ticket=>matchesState(boardStates.get(ticket.id)?.status)),ticketSort,readiness);
   const openBoardIntent=(ticket:Row,target:string)=>{if(target!==(boardStates.get(ticket.id)?.status??ticket.status))setBoardAction({ticket,target});};
   const openBoardExecution=(ticket:Row)=>setBoardAction({ticket,target:"execute"});
   function ticketCard(ticket:Row){return <TicketCard key={ticket.id} ticket={ticket} state={boardStates.get(ticket.id)} onDetails={ticket=>setDraft({...ticket})} onIntent={openBoardIntent} onExecute={openBoardExecution}/>;}
@@ -585,38 +595,12 @@ export default function Home() {
             </div>
           )}
           <div className="metrics">
-            <div>
-              <span>收集的点子</span>
-              <strong>
-                {inProject(ideas).length}
-                <small>个想法</small>
-              </strong>
-            </div>
-            <div>
-              <span>待推进任务</span>
-              <strong>
-                {
-                  inProject(tickets).filter(
-                    (t) => t.status === "todo" || t.status === "running",
-                  ).length
-                }
-                <small>个 Ticket</small>
-              </strong>
-            </div>
-            <div>
-              <span>需要你的处理</span>
-              <strong className={inProject(waiting).length ? "amber" : ""}>
-                {inProject(waiting).length}
-                <small>项等待</small>
-              </strong>
-            </div>
-            <div>
-              <span>已完成</span>
-              <strong>
-                {inProject(tickets).filter((t) => boardStates.get(t.id)?.tag === REVIEW_TAG).length}
-                <small>项待审核</small>
-              </strong>
-            </div>
+            {metrics.map(([target,filter,label,count,unit,tone])=>(
+              <button key={label} type="button" className={view===target&&stateFilter===filter?"active":""} aria-pressed={view===target&&stateFilter===filter} onClick={()=>{setView(target);setStateFilter(filter);}}>
+                <span>{label}</span>
+                <strong className={tone||""}>{count}<small>{unit}</small></strong>
+              </button>
+            ))}
           </div>
           {view === "inbox" && (
             <form className="capture" onSubmit={quickCapture}>
@@ -729,6 +713,7 @@ export default function Home() {
                       onChange={(e) => setStateFilter(e.target.value)}
                     >
                       <option value="all">全部状态</option>
+                      <option value="active">待推进</option>
                       {Object.entries(statuses).map(([k, v]) => (
                         <option key={k} value={k}>
                           {v}

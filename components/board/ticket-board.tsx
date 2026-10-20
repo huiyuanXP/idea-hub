@@ -30,7 +30,7 @@ export function TicketBoard({ tickets, states, readiness, list, statusFilter, on
     const column = (ticket: Row) => states.get(ticket.id)?.status ?? ticket.status ?? "todo";
     const columnRef = useRef(column);
     useEffect(() => { intentRef.current = onIntent; columnRef.current = column; });
-    const columns = Object.entries(ticketStatuses).filter(([state]) => statusFilter === "all" || state === statusFilter);
+    const columns = Object.entries(ticketStatuses).filter(([state]) => statusFilter === "all" || state === statusFilter || (statusFilter === "active" && (state === "todo" || state === "running")));
     const update = (value: Drag | null) => { dragRef.current = value; setDrag(value); };
     const cancel = () => { pending.current = null; update(null); setAnnouncement("已取消移动；任务状态保持不变。"); };
     useEffect(() => {
